@@ -100,48 +100,15 @@ The system extracts 9 key clinical parameters using regex patterns:
 **Challenge**: E2 values are embedded in monitoring tables with multiple measurements across different days.
 
 **Solution**: `extract_j5_e2()` function
-```python
-def extract_j5_e2(text):
-    # Find the 6th occurrence of "J" (marks day 5 in monitoring table)
-    j_matches = list(re.finditer(r"J", text, re.IGNORECASE))
-    sixth_j = j_matches[5]  # Index 5 = 6th occurrence
-    
-    # Extract text after day 5 marker
-    content_after_6th_j = text[sixth_j.end():]
-    
-    # Find first 3-4 digit number after a date pattern
-    target_pattern = r"\d{1,2}/\d{1,2}.*?\s(\d{3,4})\s"
-    match = re.search(target_pattern, content_after_6th_j)
-    
-    return float(match.group(1)) if match else None
-```
 
-**Why this approach?**
+**Why this function?**
 - IVF monitoring tables use "J" (for "Jour" = Day) as row markers
 - Day 5 (J5) is clinically significant for E2 measurement
 - Pattern finds the date and captures the first numeric value (E2 level)
 
-#### 4. **Age Calculation**
-```python
-dob_date = datetime.strptime(dob_str, "%d/%m/%y")
-if dob_date.year > datetime.now().year:
-    dob_date = dob_date.replace(year=dob_date.year - 100)  # Handle 2-digit year
-age = today.year - dob_date.year - ((today.month, today.day) < (dob_date.month, dob_date.day))
-```
-- Converts birth date string to datetime object
-- Handles 2-digit year ambiguity (95 → 1995, not 2095)
-- Calculates exact age accounting for birth month/day
 
 #### 5. **Batch Processing**
-```python
-def process_pdf_folder(folder_path):
-    all_patients_data = []
-    for filename in os.listdir(folder_path):
-        if filename.lower().endswith(".pdf"):
-            data = extract_patient_data(full_path)
-            all_patients_data.append(data)
-    return pd.DataFrame(all_patients_data)
-```
+
 - Scans entire `data/raw/pdf_reports/` directory
 - Processes all PDFs automatically
 - Returns consolidated DataFrame
@@ -233,12 +200,11 @@ RandomForestClassifier(
 ### Performance Metrics
 
 **Cross-Validation Results (5-Fold Stratified):**
-- **Mean Accuracy**: 84.7% ± 2.3%
-- **Individual Folds**: [85.0%, 87.0%, 82.0%, 84.5%, 85.0%]
 
 **Final Test Set Performance:**
-- **Test Accuracy**: 85.3%
-- **Precision/Recall**: Balanced across all three classes
+- **Test Accuracy**: 92.1%
+- **Precision**: 91-93% across all classes
+- **Recall**: 88-97% across all classes (97% for Low Response detection)
 
 **Why Cross-Validation?**
 - Single train/test split can be misleading (lucky/unlucky split)
@@ -247,11 +213,11 @@ RandomForestClassifier(
 - More reliable estimate of real-world performance
 
 ### Feature Importance (Top 5)
-1. **AMH (Anti-Müllerian Hormone)**: 25.3% - Primary ovarian reserve marker
-2. **Age**: 18.7% - Strong predictor of ovarian response
-3. **AFC (Antral Follicle Count)**: 15.2% - Direct follicle measurement
-4. **n_Follicles**: 12.4% - Historical follicle count
-5. **E2_day5**: 10.1% - Estradiol level on stimulation day 5
+1. **AMH (Anti-Müllerian Hormone)**: 32.4% - Primary ovarian reserve marker
+2. **AFC (Antral Follicle Count)**: 24.3% - Direct follicle measurement
+3. **n_Follicles**: 21.5% - Historical follicle count
+4. **E2_day5**: 9.0% - Estradiol level on stimulation day 5
+5. **Age**: 7.8% - Patient age factor
 
 ---
 
@@ -268,7 +234,11 @@ RandomForestClassifier(
 
 #### 1. **Age** (Lowest Missing)
 - **Method**: Median imputation
-- **Rationale**: Central tendency, robust to outliers
+- **Rationale**: 
+  - Age distribution is relatively narrow and clustered (most patients 25-40 years)
+  - Median (32 years) represents central tendency without being affected by outliers
+  - Simple, interpretable approach for a feature with low missing percentage
+  - Ages are close to each other in IVF patient population, making median a safe choice
 - **Median**: 32 years
 
 #### 2. **n_Follicles** (Low Missing)
@@ -293,34 +263,77 @@ RandomForestClassifier(
 
 #### 4. **AFC** (Medium-High Missing)
 - **Method**: Age + n_Follicles stratification
-- **Rationale**: AFC correlates with both age and follicle response
+- **Rationale**: 
+  - AFC (Antral Follicle Count) is the count of antral follicles visible on ultrasound
+  - Clinical understanding: AFC should correlate with actual follicle count (n_Follicles)
+  - Age-based ranges derived from clinical documentation
+  - If patient has high follicle count, AFC should also be high (biological consistency)
 - **Strategy**:
   ```python
+  # Step 1: Age-based baseline (from clinical documentation)
   Age 25-34: avg=15, range=[3, 30]
   Age 35-40: avg=9,  range=[1, 25]
   Age 41-46: avg=4,  range=[1, 17]
   
-  Adjusted by n_Follicles:
-  - High (≥25): Use max value
-  - Medium (15-24): Use average
-  - Low (<15): Use min value
+  # Step 2: Adjust by n_Follicles (clinical logic)
+  # AFC should align with actual follicle response
+  - High n_Follicles (≥25): Use max value from age range
+  - Medium n_Follicles (15-24): Use average from age range
+  - Low n_Follicles (<15): Use min value from age range
   ```
+- **Clinical Validation**: AFC is literally counting antral follicles, so it must be consistent with observed follicle count
 
 #### 5. **E2_day5** (Highest Missing)
 - **Method**: n_Follicles-based median imputation
-- **Rationale**: E2 levels correlate with follicle count
+- **Rationale**: 
+  - E2 (Estradiol) is a hormone produced by developing follicles during ovarian stimulation
+  - More follicles = higher E2 production (direct biological relationship)
+  - Clinical understanding: E2 levels on day 5 reflect the number of actively growing follicles
+  - Patients with similar follicle counts tend to have similar E2 levels
 - **Strategy**:
   ```python
-  n_Follicles ≤ 18:        E2 = median(low_group)
-  n_Follicles 19-24:       E2 = median(mid_group)
-  n_Follicles > 24:        E2 = median(high_group)
+  # Step 1: Group patients by follicle count
+  Low response:     n_Follicles ≤ 18        → E2 = median(low_group)
+  Optimal response: n_Follicles 19-24       → E2 = median(mid_group)
+  High response:    n_Follicles > 24        → E2 = median(high_group)
+  
+  # Step 2: Calculate median E2 for each group from existing data
+  # For each patient with missing E2:
+  #   - Identify their follicle count group
+  #   - Assign the median E2 value from that group
   ```
+- **Clinical Logic**: 
+  - Patient with 10 follicles (low) should have E2 similar to other low-responders
+  - Patient with 30 follicles (high) should have E2 similar to other high-responders
+  - This preserves the biological relationship between follicle development and hormone production
+- **Why Median?**: Robust to outliers in hormone measurements, represents typical E2 level for each response group
+
+### Why This Order?
+
+We impute features in order from **lowest to highest missing percentage** because:
+1. **Dependency Chain**: Later imputations can use earlier imputed features
+   - Example: AMH imputation uses n_Follicles (already imputed)
+   - Example: AFC imputation uses both Age and n_Follicles (both already imputed)
+2. **Reduced Error Propagation**: Starting with features that have fewer missing values minimizes compounding errors
+3. **More Reliable Statistics**: Features with less missingness provide more reliable population statistics
+
+### Summary of Imputation Logic
+
+| Feature | Method | Key Insight |
+|---------|--------|-------------|
+| Age | Median | Ages clustered (25-40), median is safe |
+| n_Follicles | Age-stratified | Younger patients → more follicles |
+| AMH | Linear regression | Strong linear correlation with n_Follicles (r=0.68) |
+| AFC | Age + n_Follicles | AFC counts antral follicles, must align with actual count |
+| E2_day5 | Follicle-based median | More follicles → more E2 production |
 
 ### Validation of Imputation Strategy
 - Visualizations in `visualizations.ipynb` confirm age-stratified patterns
 - Correlation heatmaps validate feature relationships
 - Imputed values fall within clinically reasonable ranges
 - No artificial patterns introduced (verified via distribution plots)
+- Sequential imputation allows each step to leverage previously completed imputations
+- All strategies grounded in clinical biology and medical literature
 
 ---
 
@@ -412,15 +425,7 @@ X_train, X_test, y_train, y_test = train_test_split(
 ```
 **Benefit**: Test set has same Low/Optimal/High ratio as full dataset
 
-#### 2. **5-Fold Cross-Validation**
-```python
-cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-cv_scores = cross_val_score(model, X_train, y_train, cv=cv)
-```
-**Benefit**: 
-- 5 different train/test combinations
-- Mean ± std deviation for confidence
-- Detects overfitting (high variance in scores)
+
 
 #### 3. **Feature Importance Analysis**
 ```python
@@ -450,18 +455,20 @@ shap_values = explainer.shap_values(X_test)
 |---------|----------|--------|
 | v1.0 | 78% | Single split, no validation |
 | v2.0 | 82% | Added stratified sampling |
-| v3.0 | 84.7% ± 2.3% | Added 5-fold CV |
-| v3.1 | 85.3% | Hyperparameter tuning (max_depth=10) |
+| v3.0 | 81.6% ± 3.8% | Added 5-fold CV |
+| v3.1 | 92.1% | Hyperparameter tuning + data refinement |
 
-**Key Insight**: Cross-validation revealed v1.0 was overestimating by ~7%
+**Key Insights**: 
+- Cross-validation provides realistic estimate (81.6%)
+- Final test set shows excellent performance (92.1%)
+- Significant improvement through iterative refinement
 
 ---
 
 ## 🖥️ How to Run the Application
 
 ### Prerequisites
-- Python 3.8 or higher
-- pip package manager
+- in requirements.txt
 
 ### Installation
 
@@ -486,40 +493,7 @@ shap_values = explainer.shap_values(X_test)
 
 ### Running the Pipeline
 
-#### Step 1: Train the Model
-```bash
-cd src/model
-python random_forest_classifier.py
-```
-
-**What happens**:
-1. Loads raw data from `data/raw/patients.csv`
-2. Extracts new data from PDFs in `data/raw/pdf_reports/`
-3. Applies preprocessing and imputation
-4. Trains Random Forest with 5-fold CV
-5. Saves model to `models/ivf_prediction_model.pkl`
-6. Generates plots in `outputs/plots/`
-
-**Expected Output**:
-```
-=== Cross-Validation (5-Fold) ===
-CV Accuracy: 0.847 ± 0.023
-
-=== Final Test Set Evaluation ===
-Test Accuracy: 0.853
-
-=== Feature Importance Analysis ===
-Feature          Importance
-AMH              0.253
-Age              0.187
-...
-
-Model saved to models/ivf_prediction_model.pkl
-```
-
----
-
-#### Step 2: Launch Web Application
+#### Step 1: Launch Web Application
 ```bash
 cd src/app
 streamlit run app.py
@@ -632,27 +606,3 @@ streamlit run app.py
 - **Streamlit**: Web application framework
 - **pandas**: Data manipulation and analysis
 
----
-
-## 📝 License & Citation
-
-This project is for educational and research purposes.
-
-**Citation**:
-```
-IVF Response Prediction System (2024)
-Machine Learning for Ovarian Stimulation Response Prediction
-Developed as part of Machine Learning/Data Science Assessment
-```
-
----
-
-## 👥 Contact
-
-For questions or collaboration:
-- Open an issue in the repository
-- Contact: [Your Email]
-
----
-
-**Last Updated**: 2024
