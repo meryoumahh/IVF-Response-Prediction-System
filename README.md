@@ -384,16 +384,6 @@ We impute features in order from **lowest to highest missing percentage** becaus
 
 ---
 
-### Which Approach to Use?
-
-| Scenario | Recommended Approach |
-|----------|---------------------|
-| Longitudinal studies | Experience 1 (Multi-cycle) |
-| Privacy regulations (GDPR) | Experience 2 (Independent) |
-| Treatment outcome analysis | Experience 1 (Multi-cycle) |
-| Cross-sectional studies | Experience 2 (Independent) |
-| Model training (current) | Experience 2 (More data points) |
-
 **Current Model**: Trained on Experience 2 for maximum sample size
 
 ---
