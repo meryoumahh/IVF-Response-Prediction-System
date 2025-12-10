@@ -9,8 +9,7 @@ Features:
 - Confidence scores
 - Probability distribution charts
 
-Author: [Your Name]
-Date: 2024
+
 """
 
 import streamlit as st
